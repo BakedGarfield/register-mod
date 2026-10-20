@@ -1,0 +1,23 @@
+name: Build Register Mod (Fabric 26.3)
+on: [workflow_dispatch, push]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.0'
+      - name: Compile mod
+        run: gradle clean build --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: register-mod-jar
+          path: build/libs/register-mod-0.3.0-beta.jar
+          if-no-files-found: error
