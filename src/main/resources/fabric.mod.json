@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "registermod",
+  "version": "${version}",
+  "name": "Register Mod",
+  "description": "Server-side PIN registration and login with lobby-spawn locking and configurable messages.",
+  "authors": [
+    "BakedGarfield"
+  ],
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "io.github.bakedgarfield.registermod.RegisterMod"
+    ]
+  },
+  "mixins": [
+    "registermod.mixins.json"
+  ],
+  "depends": {
+    "minecraft": "~26.3",
+    "fabricloader": ">=0.19.5",
+    "fabric-api": "*",
+    "java": ">=25"
+  },
+  "suggests": {
+    "lobbymanager": "*",
+    "mc-worlds": "*"
+  }
+}
