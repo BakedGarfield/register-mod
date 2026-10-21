@@ -16,8 +16,14 @@ jobs:
           gradle-version: '9.7.0'
       - name: Compile mod
         run: gradle clean build --stacktrace
-      - uses: actions/upload-artifact@v4
+      - name: Show generated JARs
+        run: ls -lah build/libs/
+      - name: Upload mod JAR
+        uses: actions/upload-artifact@v4
         with:
           name: register-mod-jar
-          path: build/libs/register-mod-0.3.0-beta.jar
+          path: |
+            build/libs/register-mod-*.jar
+            !build/libs/*-sources.jar
+            !build/libs/*-dev.jar
           if-no-files-found: error
