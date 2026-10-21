@@ -1,5 +1,7 @@
 package io.github.bakedgarfield.registermod;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -28,6 +30,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.Map;
 import java.util.Set;
@@ -53,23 +58,31 @@ public final class RegisterMod implements ModInitializer {
     private static long ticks;
 
     /**
-     * This lock records ONLY the lobby spawn, never the survival/logout location.
-     * While another mod is switching inventories, do not teleport the player ourselves.
+     * The authentication freeze must use exactly the same lobby target as
+     * Lobby Manager's /setlobby, NOT the world's vanilla respawn position.
+     * Never capture a player's last survival/logout position as the lock target.
      */
+    private record LobbySpawn(double x, double y, double z, float yaw, float pitch) {
+        boolean contains(ServerPlayer player) {
+            // The player may be in the lobby world before Lobby Manager's delayed
+            // /setlobby teleport. Do not begin locking until that teleport finished.
+            return player.distanceToSqr(x, y, z) < 0.25;
+        }
+    }
+
     private static final class WaitingPlayer {
         private boolean ready;
         private double x, y, z;
         private float yaw, pitch;
         private int waitingTicks;
+        private LobbySpawn expectedSpawn;
 
-        void lockAtSpawn(ServerLevel lobby) {
-            var respawn = lobby.getRespawnData();
-            var position = respawn.pos();
-            x = position.getX() + 0.5;
-            y = position.getY();
-            z = position.getZ() + 0.5;
-            yaw = respawn.yaw();
-            pitch = respawn.pitch();
+        void lockAt(LobbySpawn spawn) {
+            x = spawn.x();
+            y = spawn.y();
+            z = spawn.z();
+            yaw = spawn.yaw();
+            pitch = spawn.pitch();
             ready = true;
         }
     }
@@ -168,8 +181,55 @@ public final class RegisterMod implements ModInitializer {
         return config.lobbyDimension.equals(player.level().dimension().identifier().toString());
     }
 
-    private static void lockToSpawn(ServerPlayer player, WaitingPlayer wait, ServerLevel lobby) {
-        if (!wait.ready) wait.lockAtSpawn(lobby);
+    private static LobbySpawn worldSpawn(ServerLevel lobby) {
+        var respawn = lobby.getRespawnData();
+        var position = respawn.pos();
+        return new LobbySpawn(position.getX() + 0.5, position.getY(), position.getZ() + 0.5,
+                respawn.yaw(), respawn.pitch());
+    }
+
+    /**
+     * Read Lobby Manager's saved /setlobby destination without a hard compile-time
+     * dependency on that mod. The manager updates this file when /setlobby runs.
+     * Only use world spawn when the manager has no custom /setlobby location.
+     * A corrupt/mismatched manager config must NOT silently force the wrong spawn.
+     */
+    private static LobbySpawn lobbyManagerSpawn(ServerLevel lobby) throws IOException {
+        Path path = FabricLoader.getInstance().getConfigDir().resolve("lobbymanager.json");
+        try {
+            JsonObject settings = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+            if (!config.lobbyDimension.equals(settings.get("lobbyDimension").getAsString())) {
+                throw new IOException("Lobby Manager and Register Mod lobbyDimension values differ");
+            }
+            if (settings.has("lobbyOnJoin") && !settings.get("lobbyOnJoin").getAsBoolean()) {
+                throw new IOException("Lobby Manager lobbyOnJoin is disabled");
+            }
+            if (!settings.has("lobbySpawn") || settings.get("lobbySpawn").isJsonNull()) {
+                return worldSpawn(lobby);
+            }
+            JsonObject pos = settings.getAsJsonObject("lobbySpawn");
+            if (!config.lobbyDimension.equals(pos.get("world").getAsString())) {
+                // Lobby Manager itself falls back to the lobby world's spawn.
+                return worldSpawn(lobby);
+            }
+            LobbySpawn spawn = new LobbySpawn(pos.get("x").getAsDouble(),
+                    pos.get("y").getAsDouble(), pos.get("z").getAsDouble(),
+                    pos.get("yaw").getAsFloat(), pos.get("pitch").getAsFloat());
+            if (!Double.isFinite(spawn.x()) || !Double.isFinite(spawn.y())
+                    || !Double.isFinite(spawn.z()) || !Float.isFinite(spawn.yaw())
+                    || !Float.isFinite(spawn.pitch())) {
+                throw new IOException("Lobby Manager lobbySpawn contains invalid coordinates");
+            }
+            return spawn;
+        } catch (RuntimeException error) {
+            throw new IOException("Cannot parse Lobby Manager /setlobby spawn from " + path, error);
+        }
+    }
+
+    private static void lockToSpawn(ServerPlayer player, WaitingPlayer wait) {
+        // The spawn is locked before this method is called. In particular, do
+        // not reset the position to the world's vanilla spawn every tick.
         player.setDeltaMovement(0, 0, 0);
         // IMPORTANT: handleMovePlayer is cancelled before it can update server-side
         // coordinates. Therefore distanceToSqr() stays near zero EVEN when the
@@ -197,16 +257,39 @@ public final class RegisterMod implements ModInitializer {
                 player.connection.disconnect(Component.literal(config.messages.lobbyMissing));
                 continue;
             }
-            if (!inLobby(player)) {
-                if (lobbyManagerInstalled) {
-                    // CRITICAL: Lobby Manager owns the join teleport + inventory group swap.
-                    // Teleporting first would make it skip the survival-to-lobby inventory swap.
-                    if (wait.ready || wait.waitingTicks > config.waitForLobbyManagerTicks) {
-                        player.connection.disconnect(Component.literal(
-                                config.messages.lobbyManagerFailed));
+            if (lobbyManagerInstalled) {
+                // Lobby Manager owns the inventory swap and join teleport. Even
+                // if a player already entered the lobby dimension, the delayed
+                // /setlobby teleport might not have executed yet.
+                if (!wait.ready) {
+                    if (wait.expectedSpawn == null) {
+                        try {
+                            wait.expectedSpawn = lobbyManagerSpawn(lobby);
+                        } catch (IOException error) {
+                            LOG.error("Cannot obtain Lobby Manager /setlobby position", error);
+                            player.connection.disconnect(Component.literal(config.messages.lobbyManagerFailed));
+                            continue;
+                        }
                     }
-                } else if (wait.waitingTicks >= config.teleportDelayTicks) {
-                    wait.lockAtSpawn(lobby);
+                    if (inLobby(player) && wait.expectedSpawn.contains(player)) {
+                        wait.lockAt(wait.expectedSpawn);
+                    } else if (wait.waitingTicks > config.waitForLobbyManagerTicks) {
+                        LOG.warn("Lobby Manager did not take {} to /setlobby in time", player.getUUID());
+                        player.connection.disconnect(Component.literal(config.messages.lobbyManagerFailed));
+                        continue;
+                    } else {
+                        // Do not steal the teleport from Lobby Manager or overwrite
+                        // its inventory transition. Await the exact /setlobby spot.
+                        continue;
+                    }
+                }
+                if (!inLobby(player)) {
+                    player.connection.disconnect(Component.literal(config.messages.lobbyManagerFailed));
+                    continue;
+                }
+            } else if (!inLobby(player)) {
+                if (wait.waitingTicks >= config.teleportDelayTicks) {
+                    wait.lockAt(worldSpawn(lobby));
                     boolean moved = player.teleportTo(lobby, wait.x, wait.y, wait.z,
                             Set.of(), wait.yaw, wait.pitch, false);
                     if (!moved) {
@@ -216,9 +299,11 @@ public final class RegisterMod implements ModInitializer {
                     }
                 }
                 continue;
+            } else if (!wait.ready) {
+                wait.lockAt(worldSpawn(lobby));
             }
-            // In lobby: first lock to Worlds' configured spawn, then prevent movement.
-            lockToSpawn(player, wait, lobby);
+            // Lock to /setlobby with Lobby Manager, or to world spawn when alone.
+            lockToSpawn(player, wait);
             if (ticks % 200 == 0) {
                 try {
                     if (accounts.exists(player.getUUID()))

@@ -9,7 +9,7 @@
 - **Register a PIN:** New players use `/register <pin> <confirm_pin>` to create an account.
 - **Log in:** Returning players use `/login <pin>` on every connection.
 - **Login freeze:** Until authenticated, movement packets are blocked and the client is repeatedly corrected to the lobby spawn. Block breaking, item use, entity interaction, item dropping, damage, chat, inventory clicks and unrelated chat commands are restricted by the server-side event handlers/mixins.
-- **Automatic lobby handling:** When **Lobby Manager** (`lobbymanager`) is installed, it handles the join teleport and inventory switching. Register Mod waits for the player to reach the lobby **before** enforcing the spawn lock. Without Lobby Manager, Register Mod attempts to teleport players directly to the configured lobby dimension.
+- **Automatic lobby handling:** When **Lobby Manager** (`lobbymanager`) is installed, it handles the join teleport and inventory switching. Register Mod reads `lobbySpawn` from `config/lobbymanager.json` and waits until the player reaches **the exact `/setlobby` location** before enforcing the movement lock. It no longer returns players to Worlds’ default spawn. Without Lobby Manager, Register Mod attempts to teleport players directly to the configured lobby dimension.
 - **Secure-at-rest PIN hashes:** A separate salt and PBKDF2-HMAC-SHA256 hash are stored for each player. PINs are not stored as readable plaintext.
 - **Attempt limits:** Up to five failed PIN checks before a ten-minute lockout, plus a two-second delay between authentication attempts.
 - **Editable messages:** All player-visible command responses, reminders, error/kick messages the command usage text, and the message prefix are configurable in English by default.
@@ -42,9 +42,21 @@ The PIN must consist of **exactly four digits (0–9)**. You are prompted to log
 5. Start the server to generate `config/registermod.json` and `config/registermod/accounts/`.
 6. Stop the server to edit the config, then restart to load your changes.
 
-### Lobby spawn setup (Worlds)
+### Lobby spawn setup
 
-If you use the Worlds mod, configure the spawn while standing at the desired lobby position:
+**If Lobby Manager is installed (recommended):**
+
+1. Enter the lobby dimension (for example, `/worlds tp lobby`).
+2. Stand at the exact location where players should appear when joining.
+3. Run `/setlobby` as an operator.
+4. Verify that `config/lobbymanager.json` contains a non-null `lobbySpawn`, that `lobbyOnJoin` is `true`, and that both mods use the same `lobbyDimension` (`minecraft:lobby` by default).
+5. Disconnect and reconnect. Until a successful `/register` or `/login`, Register Mod will lock the player at **these `/setlobby` coordinates**, not at the Worlds spawn.
+
+Lobby Manager saves `/setlobby` immediately. Register Mod reads this saved location for each joining player, so further `/setlobby` changes apply on their next connection. The normal join teleport must finish within `waitForLobbyManagerTicks` (default 100 ticks / approximately 5 seconds). Register Mod does not initiate the teleport or switch inventories when Lobby Manager is present.
+
+**If Lobby Manager is NOT installed:**
+
+Register Mod teleports unauthenticated players to the configured lobby world's regular spawn. If using Worlds, configure it inside the lobby:
 
 ```mcfunction
 /worlds tp lobby
@@ -52,9 +64,7 @@ If you use the Worlds mod, configure the spawn while standing at the desired lob
 /worlds settings loadOnStartup true
 ```
 
-The mod reads the configured world's spawn dynamically; it does not use fixed coordinates. Set the **same** `lobbyDimension` (`minecraft:lobby` by default) in Register Mod and Lobby Manager. Lobby Manager should use `lobbyOnJoin: true` and its join handling must finish within Register Mod's `waitForLobbyManagerTicks` window.
-
-If Lobby Manager is missing, Register Mod attempts its own lobby teleport after `teleportDelayTicks`. If the lobby dimension is unavailable, it disconnects unauthenticated players rather than leaving them in survival.
+The `/setlobby` command belongs to Lobby Manager; without it, Register Mod cannot read a separately configured `/setlobby` location.
 
 ## Configuration and message translations
 
@@ -118,7 +128,7 @@ gradle clean build
 Or open **GitHub → Actions → Build Register Mod (Fabric 26.3)** and run the workflow. Download the **`register-mod-jar`** artifact after the build succeeds. The server mod is:
 
 ```text
-build/libs/register-mod-0.3.0-beta.jar
+build/libs/register-mod-0.3.1-beta.jar
 ```
 
 Do **not** install the `-sources.jar` file as a mod. Source compilation and live multiplayer behavior should be tested before public distribution.
@@ -127,9 +137,9 @@ Do **not** install the `-sources.jar` file as a mod. Source compilation and live
 
 Test these cases with a **backup server and dummy player accounts/items**, especially when Lobby Manager is also installed:
 
-1. Fresh player joins: appears at the lobby spawn and cannot move or interact.
+1. Fresh player joins: arrives exactly at `/setlobby`, not Worlds’ default spawn, and cannot move or interact. Test with `/setlobby` several blocks away from the Worlds spawn.
 2. `/register 5832 5832`: creates an account and **immediately releases the player** in the lobby.
-3. Player reconnects from survival or another dimension: Lobby Manager transfers and swaps inventories before the login freeze; survival items and positions remain intact.
+3. Player reconnects from survival, the lobby (at an old position), or another dimension: Lobby Manager transfers to `/setlobby` and swaps inventories before the login freeze; survival items and positions remain intact.
 4. `/login 5832`: login succeeds and the player's lobby movement works.
 5. Wrong PIN, five failed attempts, ten-minute lockout and two-second command cooldown.
 6. Missing lobby or unsuccessful teleport: player is disconnected safely.

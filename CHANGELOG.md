@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1-beta
+
+- Fixed a compatibility bug where Register Mod kept teleporting unauthenticated players to Worlds’ default lobby spawn instead of the `/setlobby` destination set by Lobby Manager.
+- With Lobby Manager installed, Register Mod reads the configured `lobbySpawn` in `config/lobbymanager.json` and waits for Lobby Manager’s delayed teleport before freezing the player at that exact position.
+- Does not interfere with Lobby Manager's inventory swaps, `/returntosurvival`, or separate overworld death respawn.
+- Without Lobby Manager, retains the old Worlds lobby spawn behavior.
+- Updated installation, testing instructions, JAR version, and GitHub Actions output name.
+
+
 ## 0.3.0-beta
 
 - Rebranded to **Register Mod** (`registermod`).
