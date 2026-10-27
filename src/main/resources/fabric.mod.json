@@ -1,19 +1,30 @@
 {
   "schemaVersion": 1,
-  "id": "lobbymanager",
+  "id": "registermod",
   "version": "${version}",
-  "name": "Lobby Manager",
-  "description": "Custom lobby spawn on join, Overworld respawn on death, separate inventories, and lobby protection.",
-  "authors": ["BakedGarfield"],
+  "name": "Register Mod",
+  "description": "Server-side PIN registration and login with lobby-spawn locking and configurable messages.",
+  "authors": [
+    "BakedGarfield"
+  ],
   "license": "MIT",
   "environment": "server",
-  "entrypoints": { "main": ["io.github.bakedgarfield.lobbymanager.LobbyManager"] },
-  "mixins": ["lobbymanager.mixins.json"],
-  "depends": {
-    "fabricloader": ">=0.19.5",
-    "minecraft": "~26.3",
-    "java": ">=25",
-    "fabric-api": "*"
+  "entrypoints": {
+    "main": [
+      "io.github.bakedgarfield.registermod.RegisterMod"
+    ]
   },
-  "suggests": { "mc-worlds": "*" }
+  "mixins": [
+    "registermod.mixins.json"
+  ],
+  "depends": {
+    "minecraft": "~26.3",
+    "fabricloader": ">=0.19.5",
+    "fabric-api": "*",
+    "java": ">=25"
+  },
+  "suggests": {
+    "lobbymanager": "*",
+    "mc-worlds": "*"
+  }
 }
